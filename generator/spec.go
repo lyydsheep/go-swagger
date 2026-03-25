@@ -128,8 +128,11 @@ func (g *GenOpts) analyzeSpec() (*loads.Document, *analysis.Spec, error) {
 		}
 	}
 
-	// analyze the spec
-	analyzed := analysis.New(specDoc.Spec())
+	// analyze the spec with caching support
+	analyzed, err := g.getAnalyzedSpec(specDoc)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	return specDoc, analyzed, nil
 }

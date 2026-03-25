@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/go-openapi/analysis"
@@ -359,6 +360,11 @@ type GenOptsCommon struct {
 	WantsRootedErrorPath   bool
 	ReturnErrors           bool
 	WithCustomFormatter    bool
+
+	// Cache for analyzed spec to avoid redundant analysis calls
+	cachedRawSpec     *spec.Swagger // cached raw spec document
+	cachedAnalyzedSpec *analysis.Spec // cached analyzed spec
+	cacheMutex        sync.Mutex     // mutex for thread-safe cache access
 
 	templates *Repository // a shallow clone of the global template repository
 }
@@ -1153,4 +1159,79 @@ func concatUnique(collections ...[]string) []string {
 		result = append(result, k)
 	}
 	return result
+}
+
+// setCachedRawSpec deep clones and caches the raw spec document for reuse
+func (g *GenOpts) setCachedRawSpec(spec *spec.Swagger) {
+	g.cacheMutex.Lock()
+	defer g.cacheMutex.Unlock()
+
+	if spec == nil {
+		g.cachedRawSpec = nil
+		return
+	}
+
+	// Deep clone the spec to prevent mutation issues
+	clonedSpec := &spec.Swagger{}
+	if err := deepCloneSpec(spec, clonedSpec); err != nil {
+		log.Printf("warning: failed to deep clone spec for caching: %v", err)
+		g.cachedRawSpec = nil
+		return
+	}
+
+	g.cachedRawSpec = clonedSpec
+}
+
+// getAnalyzedSpec returns an analyzed spec with deep cloning to ensure independence
+func (g *GenOpts) getAnalyzedSpec(specDoc *loads.Document) (*analysis.Spec, error) {
+	g.cacheMutex.Lock()
+	defer g.cacheMutex.Unlock()
+
+	if g.cachedAnalyzedSpec != nil && g.cachedRawSpec != nil {
+		// Deep clone the cached raw spec before analysis to ensure independence
+		clonedSpec := &spec.Swagger{}
+		if err := deepCloneSpec(g.cachedRawSpec, clonedSpec); err != nil {
+			return nil, fmt.Errorf("failed to deep clone cached spec: %w", err)
+		}
+
+		analyzed := analysis.New(clonedSpec)
+		g.cachedAnalyzedSpec = analyzed
+		return analyzed, nil
+	}
+
+	// No cache available, analyze fresh
+	analyzed := analysis.New(specDoc.Spec())
+	g.cachedAnalyzedSpec = analyzed
+
+	// Cache the raw spec for future reuse
+	if specDoc.Spec() != nil {
+		clonedSpec := &spec.Swagger{}
+		if err := deepCloneSpec(specDoc.Spec(), clonedSpec); err != nil {
+			log.Printf("warning: failed to deep clone spec for caching: %v", err)
+		} else {
+			g.cachedRawSpec = clonedSpec
+		}
+	}
+
+	return analyzed, nil
+}
+
+// deepCloneSpec performs a deep clone of a spec document using JSON marshaling/unmarshaling
+func deepCloneSpec(src, dst spec.Swagger) error {
+	if src == nil || dst == nil {
+		return errors.New("cannot clone nil spec")
+	}
+
+	// Marshal to JSON
+	data, err := json.Marshal(src)
+	if err != nil {
+		return fmt.Errorf("failed to marshal spec: %w", err)
+	}
+
+	// Unmarshal to destination
+	if err := json.Unmarshal(data, dst); err != nil {
+		return fmt.Errorf("failed to unmarshal spec: %w", err)
+	}
+
+	return nil
 }

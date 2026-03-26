@@ -31,7 +31,7 @@ func GenerateClient(name string, modelNames, operationIDs []string, opts *GenOpt
 	// Each getAnalyzedSpec() call returns a fresh, isolated copy of the analyzed spec.
 	opts.setCachedAnalyzedSpec(specDoc.Spec())
 
-	models, err := gatherModels(specDoc, modelNames)
+	models, err = gatherModels(specDoc, modelNames)
 	if err != nil {
 		return err
 	}
